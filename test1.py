@@ -176,7 +176,7 @@ best_zcar = np.argmax(clay_zcar + sand_zcar)
 clay_rmse_mean = (clay_error**2).mean()**0.5
 sand_rmse_mean = (sand_error**2).mean()**0.5
 comb_rmse_mean = (comb_error**2).mean()**0.5
-print("rmse mean Errors: clay={:.3}, sand={:.3}, comb={:.3}".format(clay_rmse_mean, sand_rmse_mean, comb_rmse_mean))
+print("rmse mean Errors: clay={:.4}, sand={:.4}, comb={:.4}".format(clay_rmse_mean, sand_rmse_mean, comb_rmse_mean))
 
 graphicZCAR("clay_spectral_error", clay_zcar)
 graphicZCAR("sand_spectral_error", sand_zcar)
