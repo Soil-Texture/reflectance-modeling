@@ -1,95 +1,139 @@
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from spc_utils import PMF, elbow, unmixPMF , rmse, unmixing
+from spc_utils import corrAbsMin, corrAbsMax, corrAbsMean, corrAbsMedian, corrAbs
+from spc_utils import PMF, MF, elbow, unmixPMF , rmse, unmixing, rpiq
+from spc_utils import plot, plotHistory, plotEndmembers, plotScatter, plotRangesError, plotBoxes
+from VCA import vca
 
 # work_path = "/share1/jorgenarvaez/proyects/full-test"
-work_path = "."
-train_index, test_index = np.load(work_path+"/train_index.npy"), np.load(work_path+"/test_index.npy")
-texture_clean = np.load(work_path+"/texture-clean.npy")
-spc_clean = np.load(work_path+"/spc-clean.npy")
-wavelength = np.load(work_path+"/wavelength.npy")
+source_path='./GDSSL'
+train_index, test_index = np.load(source_path+"/train_index.npy"), np.load(source_path+"/test_index.npy")
+texture_clean = np.load(source_path+"/texture-clean.npy")
+spc_clean = np.load(source_path+"/spc-clean.npy")
+wavelength = np.load(source_path+"/wavelength.npy")
 spc_train, spc_test = spc_clean[train_index,:], spc_clean[test_index,:]
 texture_train, texture_test = texture_clean[train_index, :], texture_clean[test_index,:]
 
 rang_end = 20
+C = 16
+tol = 1e-5
+sum_1 = False
+work_path = './VCA_SumLess_C_{}'.format(C)
+
 if os.path.exists(work_path+'/factorization_error.npy'):
     errors = np.load(work_path+'/factorization_error.npy')
+    a_rpiq = np.load(work_path+'/PMF_abundances_rpiq.npy')
     rang_start = np.argmax(errors == 0) + 1
 else :
     errors = np.zeros(rang_end + 1)
+    a_rpiq = np.zeros(rang_end + 1)
     rang_start = 1
 
+
 for rang in range(rang_start, rang_end + 1):
-    print("Working on rang={}".format(rang))
-    a, b, hist = PMF(spc_train, rang, max_iter=100000)
-    errors[rang - 1] = rmse(a@b, spc_train)
+    alpha = 0.0001 if rang == 1 else 0.0001
+    print("Working on VCA rang={}".format(rang))
+    init_emb, _, _ = vca(spc_train.T, rang, verbose=True)
+    print("Working on Factorization rang={}".format(rang))
+    abundances, endmembers, hist = unmixPMF(spc_train, rang, b_init=init_emb.T, alpha=alpha, tol=tol, C=C, sum_1=sum_1)
+    errors[rang - 1] = rmse(abundances @ endmembers, spc_train)
+    np.save(work_path+'/PMF_abundances_{}_{}.npy'.format(C, rang), abundances)
+    np.save(work_path+'/PMF_endmembers_{}_{}.npy'.format(C, rang), endmembers)
     np.save(work_path+'/factorization_error.npy', errors)
     print("Rango = {}, RMSE = {:.4}".format(rang, errors[rang - 1]))
-    plt.figure()
-    title = "Historia del error de factorización R=AB (Rango={})".format(rang)
-    plt.title(title)
-    plt.plot(range(1,len(hist) + 1), hist)
-    plt.xlabel("Iteración")
-    plt.ylabel("MSE")
-    plt.grid()
-    plt.savefig(work_path+'/'+title + ".png")
-
-
+    plotHistory(
+        "Historia del error de factorización R=AB C={} Rango={}".format(C, rang), 
+        "MSE", hist, work_path
+        )
+    plot(
+        "Suma de las abundancias C={} Rango={}".format(C, rang), 
+        range(spc_train.shape[0]), abundances.sum(axis=1), work_path, 
+        "Muestras", "Suma", ylim=(0,2)
+        )
+    plotEndmembers(
+        "Endmembers C={} Rango={}".format(C, rang),
+        endmembers, wavelength, work_path
+    )
+    print("Working on Unmixing C={} rang={}".format(C, rang))
+    pred_abundances, hist = unmixing(spc_train.T, endmembers.T, alpha=alpha, tol=tol, C=C, sum_1=sum_1)
+    pred_abundances = pred_abundances.T
+    np.save(work_path+'/UNMIX_abundances_{}_{}.npy'.format(C, rang), pred_abundances)
+    plotHistory(
+        "Historia del error de desmezclado C={} Rango={}".format(C, rang), 
+        "MSE", hist, work_path
+        )
+    plotScatter(
+        "Dispersión de abundancias C={} rang={}\n Factorización vs Desmezclado".format(C, rang),
+        abundances, pred_abundances, "factorización", "desmezclado",  work_path, (0,1), (0,1)
+    )
+    a_rpiq[rang - 1] = rpiq(pred_abundances, abundances)
+    np.save(work_path+'/PMF_abundances_rpiq.npy', a_rpiq)
+    
 errors = errors[0:-1]
 elbow_rang = elbow(errors) + 1
-plt.figure()
-title="Error de factorización vs Rango"
-plt.title(title)
-plt.plot(range(1, rang_end+1), errors)
-plt.plot([elbow_rang, elbow_rang], [0, np.max(errors)])
-plt.xlabel("Rango")
-plt.xticks(range(1, rang_end+1))
-plt.ylabel("RMSE")
-plt.grid()
-plt.savefig(work_path+'/'+title + ".png")
+plotRangesError(
+    "Error de factorización vs Rango",
+    1, errors, "RMSE", work_path, elbow_rang
+)
 
-groups_test = 2
-rang = 12
-C=10
-if os.path.exists(work_path+'/endmembers_groups_{}_{}.npy'.format(rang, C)):
-    endmembers_groups = np.load(work_path+'/endmembers_groups_{}_{}.npy'.format(rang, C))
-    abundances_groups = np.load(work_path+'/abundances_groups_{}_{}.npy'.format(rang, C))
-    i_start = np.argmax(endmembers_groups.sum(axis=0).sum(axis=0) == 0)
-else :
-    endmembers_groups = np.zeros((rang, spc_train.shape[1], groups_test+1))
-    abundances_groups = np.zeros((spc_train.shape[0], rang, groups_test+1))
-    i_start = 0
-for i in range(i_start, groups_test):
-    print("Working on endmembers group {}".format(i))
-    abundances, endmembers_groups[:,:,i], hist = unmixPMF(spc_train, rang, tol=1e-7, C=C)
-    np.save(work_path+'/endmembers_groups_{}_{}.npy'.format(rang, C), endmembers_groups)
-    np.save(work_path+'/abundances_groups_{}_{}.npy'.format(rang, C), abundances_groups)
-    print("Group = {}, RMSE = {:.4}".format(i, rmse(abundances @ endmembers_groups[:,:,i], spc_train)))
-    plt.figure()
-    title = "Historia del error de factorización C={} Rango={} (Grupo={})".format(C, rang, i)
-    plt.title(title)
-    plt.plot(range(1,len(hist) + 1), hist)
-    plt.xlabel("Iteración")
-    plt.ylabel("MSE")
-    plt.grid()
-    plt.savefig(work_path+'/'+title + ".png")
-    plt.figure()
-    title = "Suma de las abundancias C={} Rango={} (Grupo={})".format(C, rang, i)
-    plt.title(title)
-    plt.plot(abundances.sum(axis=1))
-    plt.xlabel("Muestra")
-    plt.ylabel("Suma")
-    plt.grid()
-    plt.ylim((0,2))
-    plt.savefig(work_path+'/'+title + ".png")
-    plt.figure()
-    title = "Endmembers C={} Rango={} (Grupo={})".format(C, rang, i)
-    plt.title(title)
-    for j in range(rang):
-        plt.plot(wavelength, endmembers_groups[j,:,i])
-    plt.xlabel("Longitud de Onda (nm)")
-    plt.ylabel("Reflectancia")
-    plt.grid()
-    plt.xlim((400,2500))
-    plt.savefig(work_path+'/'+title + ".png")
+a_rpiq = a_rpiq[0:-1]
+plotRangesError(
+    "RPIQ vs RANGO",
+    1, a_rpiq, "RPIQ", work_path
+)
+
+corr_mean=[]
+corr_min=[]
+corr_max=[]
+corr_median=[]
+corr = []
+for rang in range(2, rang_end+1):
+    endmembers = np.load(work_path + '/PMF_endmembers_{}_{}.npy'.format(C, rang))
+    corr_mean.append(corrAbsMean(endmembers))
+    corr_min.append(corrAbsMin(endmembers))
+    corr_max.append(corrAbsMax(endmembers))
+    corr_median.append(corrAbsMedian(endmembers))
+    corr.append(corrAbs(endmembers))
+
+plotBoxes(
+    "Correlaciones vs Rango",
+    corr, work_path, xticks=range(2, rang_end+1)
+)
+
+corr_mean = np.array(corr_mean)
+plotRangesError(
+    "Correlación Media vs RANGO",
+    2, corr_mean, "Correlación Media", work_path
+)
+
+corr_min = np.array(corr_min)
+plotRangesError(
+    "Correlación Minima vs RANGO",
+    2, corr_min, "Correlación Minima", work_path
+)
+
+corr_max = np.array(corr_max)
+plotRangesError(
+    "Correlación Máxima vs RANGO",
+    2, corr_max, "Correlación Maxima", work_path
+)
+
+corr_median = np.array(corr_median)
+plotRangesError(
+    "Correlación Mediana vs RANGO",
+    2, corr_median, "Correlación Mediana", work_path
+)
+
+rang = 30
+endmembers = np.load(work_path + '/PMF_endmembers_{}_{}.npy'.format(C, rang))
+abundances = np.load(work_path + '/PMF_abundances_{}_{}.npy'.format(C, rang))
+
+print("Working on Texture Matrix")
+_, text_matrix, hist = MF(texture_train, a=abundances, alpha=0.001, tol=1e-6)
+plotHistory(
+    "Historia del error de calculo de Matriz de Texturas  Rango={}".format(rang), 
+    "MSE", hist, work_path
+    )
+print("RPIQ: {:.5f}".format(rpiq(abundances @ text_matrix, texture_train)))
+
